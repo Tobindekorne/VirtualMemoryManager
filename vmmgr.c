@@ -14,6 +14,8 @@
 #define NUM_FRAMES 256	//The maximum number of frames this system supports
 #define TLB_SIZE 16		//The maximum number of TLB entries
 
+extern int errno;
+
 //Function prototypes declared here
 void printTable(int arr[], size_t size);
 int getPageNumber(int logicalAdd);
@@ -21,6 +23,25 @@ int getPageOffset(int logicalAdd);
 int readBackingStore();
 void translateAddress(int arr[]);
 void initialize(int arr[], size_t size);
+
+
+void bin(unsigned n)
+{
+    unsigned i;
+    for (i = 1 << 31; i > 0; i = i / 2)
+        (n & i) ? printf("1"): printf("0");
+	printf("\n");
+}
+
+void bin2(char * arr) {
+	int j, i;
+	for (j = 0; j < 256; j++) {
+		for (i = 0; i < 8; i++) {
+			printf("%d", !!((arr[j] << i) & 0x80));
+		}
+		printf("\n");
+	}
+}
 
 //
 //Start of the main program
@@ -35,8 +56,10 @@ int main(int argc, char const *argv[]) {
 	char *addFile = NULL;			//name of the file containing logical addresses
 	char *backStoreFile = NULL;	//name of the backing store file
 	char logicalAdd[8];		//will hold a logical address from file
+	char address[256];
 	int logicalAddress, index = 0;
 	FILE *addFD = NULL;			//file descriptor for logical address file
+	FILE *backFD = NULL;		//file descriptor for the backing store file
 
 	//initialize arrays for ram, virtual memory, and the TLB
 	int ram[FRAME_SIZE * NUM_FRAMES]; 	//set up ram to have 256 frames with 256 bytes each
@@ -52,10 +75,20 @@ int main(int argc, char const *argv[]) {
 
 	//printTable(vm, sizeof(vm)/sizeof(int));
 
-	//Read file
+	//Read files
+	//Open address file for reading in logical addresses
 	addFD = fopen(argv[1], "r");
-	if (addFD == NULL)
+	if (addFD == NULL) {
+		fprintf(stderr, "%s\n", strerror(errno));
 		exit(EXIT_FAILURE);
+	}
+
+	//open the backing store file to read in data from disk
+	backFD = fopen("BACKING_STORE.bin", "r");
+	if (backFD == NULL) {
+		fprintf(stderr, "%s\n", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
 	//This while loop reads in each line of logical addresses and processes them
 	//using the functions written for dealing with a paging system
@@ -63,11 +96,16 @@ int main(int argc, char const *argv[]) {
 		logicalAddress = atoi(logicalAdd);
 		vm[index] = logicalAddress;
 		index++;
-		printf("%i\n", logicalAddress);
 	}
 
+	// while(!feof(backFD)) {
+		fread(address, 256, 1, backFD);
+		unsigned n = atoi(address);
+		bin2(address);
+	// }
+
 	//Translate addresses
-	translateAddress(vm);
+	//translateAddress(vm);
 
 	//Process
 
