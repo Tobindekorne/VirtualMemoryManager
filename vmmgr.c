@@ -16,14 +16,16 @@
 extern int errno;
 
 //Function prototypes declared here
+void readPageFromBackingStore(char page[], FILE * FD);
+void initializeTLB(int arr[][2], size_t size);
 void printTable(int arr[], size_t size);
+void initialize(int arr[], size_t size);
+void bin2(char * arr);
+void bin(unsigned n);
+int translateAddress(int virtualAddress);
 int getPageNumber(int logicalAdd);
 int getPageOffset(int logicalAdd);
 int readBackingStore();
-void translateAddress(int arr[]);
-void initialize(int arr[], size_t size);
-void bin(unsigned n);
-void bin2(char * arr);
 
 //
 //Start of the main program
@@ -35,11 +37,12 @@ int main(int argc, char const *argv[]) {
 		return -1;
 	}
 
-	char *addFile = NULL;			//name of the file containing logical addresses
-	char *backStoreFile = NULL;	//name of the backing store file
-	char logicalAdd[8];		//will hold a logical address from file
-	char address[256];
-	int logicalAddress, index = 0;
+	char *addFile = NULL;		    //name of the file containing logical addresses
+	char *backStoreFile = NULL;	   //name of the backing store file
+	char logicalAdd[8];		       //will hold a logical address from file
+	char page[256];                //used to hold a 256 byte page loaded from disk (BACKING_STORE.bin file)
+	int logicalAddress;            //used to hold a logical address from the address file
+    int index = 0;                  //to keep track of the current index into memory
 	FILE *addFD = NULL;			//file descriptor for logical address file
 	FILE *backFD = NULL;		//file descriptor for the backing store file
 
@@ -51,9 +54,9 @@ int main(int argc, char const *argv[]) {
     // one slot for the page number and one for the frame number
 	int tlb[TLB_SIZE][2];
 
-	//Use the initialize function to initialize each table with blank memory (-1 in each slot)
+	// initialize each table with blank memory (-1 in each slot)
 	initialize(ram, FRAME_SIZE * NUM_FRAMES);
-	initialize(tlb, TLB_SIZE);
+	initializeTLB(tlb, TLB_SIZE);
 	initialize(pageTable, PAGE_LENGTH);
 
 	//printTable(vm, sizeof(vm)/sizeof(int));
@@ -62,14 +65,14 @@ int main(int argc, char const *argv[]) {
 	//Open address file for reading in logical addresses
 	addFD = fopen(argv[1], "r");
 	if (addFD == NULL) {
-		fprintf(stderr, "%s\n", strerror(errno));
+		fprintf(stderr, "Error reading logical address file: %s\n", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
 	//open the backing store file to read in data from disk
 	backFD = fopen("BACKING_STORE.bin", "r");
 	if (backFD == NULL) {
-		fprintf(stderr, "%s\n", strerror(errno));
+		fprintf(stderr, "Error reading BACKING_STORE.bin: %s\n", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
@@ -81,18 +84,24 @@ int main(int argc, char const *argv[]) {
 		index++;
 	}
 
-	// while(!feof(backFD)) {
-		fread(address, 256, 1, backFD);
-		unsigned n = atoi(address);
-		bin2(address);
-	// }
+    readPageFromBackingStore(page, backFD);
 
 	//Translate addresses
-	//translateAddress(pageTable);
-
-	//Process
 
 	return EXIT_SUCCESS;
+}
+
+/*
+ * Function:  readPageFromBackingStore
+ * --------------------
+ * Reads a page from secondary memory (BACKING_STORE.bin) into a page array
+ *
+ *  page: the char array for a page
+ *  FD: the file descriptor for seconday memory
+ *
+ */
+void readPageFromBackingStore(char page[], FILE * FD) {
+    fread(page, PAGE_LENGTH, 1, FD);
 }
 
 /*
@@ -109,6 +118,24 @@ void initialize(int arr[], size_t size) {
 	int i = 0;
 	for (i = 0; i < size; i++) {
 		arr[i] = -1;
+	}
+}
+
+/*
+ * Function:  initializeTLB
+ * --------------------
+ * initialize the TLB array with every
+ * entry set to -1 to denote uninitialized memory
+ *
+ *  arr: the 2 dimensional int array for the TLB to be initialized
+ *  size: the size of the array
+ *
+ */
+void initializeTLB(int arr[][2], size_t size) {
+	int i = 0;
+	for (i = 0; i < size; i++) {
+		arr[i][0] = -1;
+		arr[i][1] = -1;
 	}
 }
 
@@ -175,19 +202,15 @@ int getPageOffset(int logicalAdd) {
  *  returns: the frame number of the address
  *           returns -1 if there is a page fault
  */
-void translateAddress(int arr[]) {
-	int i = 0; //indexing value
+int translateAddress(int virtualAddress) {
 	unsigned char page, offset; //variables for holding the page number and page offset
 	int frame, physicalAddress;
-	while (arr[i] != -1) { //while we still have a valid memory address
-		offset = getPageOffset(arr[i]);
-		page = getPageNumber(arr[i]);
-		frame = page * FRAME_SIZE;
-		physicalAddress = frame + offset;
-		//ADD PAGE FAULT FUNCTIONALITY LATER!!!
-		outputData(arr[i], physicalAddress, (char) (arr[i] >> 16), page, offset);
-		i++; //increment the index
-	}//end while
+	offset = getPageOffset(virtualAddress);
+	page = getPageNumber(virtualAddress);
+	frame = page * FRAME_SIZE;
+	physicalAddress = frame + offset;
+	outputData(virtualAddress, physicalAddress, (char) (virtualAddress >> 16), page, offset);
+    return physicalAddress;
 }
 
 /*
@@ -238,3 +261,12 @@ void bin2(char * arr) {
 		printf("\n");
 	}
 }
+
+
+//DEV NOTES:
+// while(!feof(backFD)) {
+//This will read in a single page from secondary memory
+    // fread(page, 256, 1, backFD);
+    // unsigned n = atoi(page);
+    // bin2(page);
+// }
