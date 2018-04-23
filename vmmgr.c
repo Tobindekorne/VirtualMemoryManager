@@ -16,7 +16,8 @@
 extern int errno;
 
 //Function prototypes declared here
-void readPageFromBackingStore(char page[], FILE * FD);
+void outputData(int logicalAdd, int physicalAdd, char signedByte, unsigned char page, unsigned char offset);
+void readPageFromBackingStore(char page[], FILE * FD, int pageNumber);
 void initializeTLB(int arr[][2], size_t size);
 void printTable(int arr[], size_t size);
 void initialize(int arr[], size_t size);
@@ -25,26 +26,25 @@ void bin(unsigned n);
 int translateAddress(int virtualAddress);
 int getPageNumber(int logicalAdd);
 int getPageOffset(int logicalAdd);
-int readBackingStore();
 
 //
 //Start of the main program
 //
 int main(int argc, char const *argv[]) {
-	//Start be ensuring correct input from the user
+	//Start by ensuring correct input from the user
 	if (argc != 2) {
 		printf("Usage: ./vmmgr <file>\n");
 		return -1;
 	}
 
-	char *addFile = NULL;		    //name of the file containing logical addresses
-	char *backStoreFile = NULL;	   //name of the backing store file
-	char logicalAdd[8];		       //will hold a logical address from file
-	char page[256];                //used to hold a 256 byte page loaded from disk (BACKING_STORE.bin file)
-	int logicalAddress;            //used to hold a logical address from the address file
-    int index = 0;                  //to keep track of the current index into memory
-	FILE *addFD = NULL;			//file descriptor for logical address file
-	FILE *backFD = NULL;		//file descriptor for the backing store file
+	char logicalAdd[8];         //A char representation of a logical address from address file
+	char page[256];             //a 256 byte page loaded from disk (BACKING_STORE.bin file)
+	int logicalAddress;         //an integer representation of a logical address from the address file
+    int pageNum;                //page number of the current logical address
+    int physicalAddress;        //full physical address where the signed byte is stored
+    signed char signedByte;     //physical frame number
+    FILE *addFD = NULL;         //file descriptor for logical address file
+    FILE *backFD = NULL;        //file descriptor for the backing store file
 
 	//initialize arrays for ram, virtual memory, and the TLB
 	int ram[FRAME_SIZE * NUM_FRAMES]; 	//set up ram to have 256 frames with 256 bytes each
@@ -59,11 +59,9 @@ int main(int argc, char const *argv[]) {
 	initializeTLB(tlb, TLB_SIZE);
 	initialize(pageTable, PAGE_LENGTH);
 
-	//printTable(vm, sizeof(vm)/sizeof(int));
-
-	//Read files
 	//Open address file for reading in logical addresses
 	addFD = fopen(argv[1], "r");
+    //check if an error occured while trying to open the file
 	if (addFD == NULL) {
 		fprintf(stderr, "Error reading logical address file: %s\n", strerror(errno));
 		exit(EXIT_FAILURE);
@@ -71,6 +69,7 @@ int main(int argc, char const *argv[]) {
 
 	//open the backing store file to read in data from disk
 	backFD = fopen("BACKING_STORE.bin", "r");
+    //check if an error occured while trying to open the file
 	if (backFD == NULL) {
 		fprintf(stderr, "Error reading BACKING_STORE.bin: %s\n", strerror(errno));
 		exit(EXIT_FAILURE);
@@ -78,15 +77,41 @@ int main(int argc, char const *argv[]) {
 
 	//This while loop reads in each line of logical addresses and processes them
 	//using the functions written for dealing with a paging system
-	while (fgets(logicalAdd, 7, addFD) != NULL) {
-		logicalAddress = atoi(logicalAdd);
-		pageTable[index] = logicalAddress;
-		index++;
-	}
+	while (fgets(logicalAdd, 7, addFD) != NULL) { //logicalAdd now holds the next logical address
+		logicalAddress = atoi(logicalAdd);    //logicalAddress is the integer version
+        //get the page number and see if there is an entry in the page table there
+        pageNum = getPageNumber(logicalAddress);
+        //if the page number was in the page table:
+        if (pageTable[pageNum] != -1) {
+            //generate the physical address and get the byte stored there
+            physicalAddress = translateAddress(logicalAddress);
+            signedByte = (char) ram[physicalAddress];
+        }
+        else { //if not in page table - PAGE FAULT!!:
+            //load a page into the RAM from secondary memory
+            readPageFromBackingStore(page, backFD, pageNum);
+            //ram[pageNum * PAGE_LENGTH] = page;
+            //translate the logical address to a physical address
+            physicalAddress = translateAddress(logicalAddress);
+            //then update the page table
+            pageTable[pageNum] = physicalAddress >> 8;
+        }
+        //now get the signed byte from the correct location in RAM
+        signedByte = ram[physicalAddress];
+        /*generate output for the user to see what happened
+        * This includes:
+        *       Locical address
+        *       Physical address
+        *       the signed byte value at that location
+        *       The page number
+        *       The page offset
+        */
+        outputData(logicalAddress, physicalAddress, signedByte, pageNum, getPageOffset(logicalAddress));
+	} //end main while for logical address processing
 
-    readPageFromBackingStore(page, backFD);
-
-	//Translate addresses
+    //close both the logical address file and the backing store file
+    fclose(addFD);
+    fclose(backFD);
 
 	return EXIT_SUCCESS;
 }
@@ -98,9 +123,16 @@ int main(int argc, char const *argv[]) {
  *
  *  page: the char array for a page
  *  FD: the file descriptor for seconday memory
+ *  pageNumber: the page number we need to load from secondary memory
  *
  */
-void readPageFromBackingStore(char page[], FILE * FD) {
+void readPageFromBackingStore(char page[], FILE * FD, int pageNumber) {
+    //seek to the correct location in secondary memory
+    //since the pages are 256 bytes in length, we need to seek:
+    //      256 * pageNumber
+    //This will pace the file descriptor pointer at the start of the page
+    fseek(FD, pageNumber * PAGE_LENGTH, SEEK_SET);
+    //then read a 256 byte page from that location
     fread(page, PAGE_LENGTH, 1, FD);
 }
 
@@ -152,6 +184,18 @@ int getPageNumber(int logicalAdd) {
 	return logicalAdd >> 8; //shift the bits right 8 times to place the page number in the correct location
 }
 
+/*
+* Function: getPageOffset
+* --------------------
+* computes the page offset of a virtual address:
+*
+*  logicalAdd: the logical address to get the offset from as an int
+*
+*  returns: the 8 bit representation of the page offset
+*/
+int getPageOffset(int logicalAdd) {
+    return logicalAdd & 0xFF; //bit mask the logical address with hex FF to get the last bits of data
+}
 
 /*
  * Function:  outputData
@@ -179,18 +223,6 @@ void outputData(int logicalAdd, int physicalAdd, char signedByte, unsigned char 
 	printf("%s\n", head_foot);
 }
 
-/*
- * Function: getPageOffset
- * --------------------
- * computes the page offset of a virtual address:
- *
- *  logicalAdd: the logical address to get the offset from as an int
- *
- *  returns: the 8 bit representation of the page offset
- */
-int getPageOffset(int logicalAdd) {
-	return logicalAdd & 0xFF; //bit mask the logical address with hex FF to get the last bits of data
-}
 
 /*
  * Function:  translateAddress
@@ -209,7 +241,6 @@ int translateAddress(int virtualAddress) {
 	page = getPageNumber(virtualAddress);
 	frame = page * FRAME_SIZE;
 	physicalAddress = frame + offset;
-	outputData(virtualAddress, physicalAddress, (char) (virtualAddress >> 16), page, offset);
     return physicalAddress;
 }
 
@@ -236,8 +267,7 @@ void printTable(int arr[], size_t size) {
  *
  *  n: an unsigned vlaue
  */
-void bin(unsigned n)
-{
+void bin(unsigned n) {
     unsigned i;
     for (i = 1 << 31; i > 0; i = i / 2)
         (n & i) ? printf("1"): printf("0");
@@ -254,7 +284,7 @@ void bin(unsigned n)
  */
 void bin2(char * arr) {
 	int j, i;
-	for (j = 0; j < 256; j++) {
+	for (j = 0; j < PAGE_LENGTH; j++) {
 		for (i = 0; i < 8; i++) {
 			printf("%d", !!((arr[j] << i) & 0x80));
 		}
