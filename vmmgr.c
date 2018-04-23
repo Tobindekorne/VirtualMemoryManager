@@ -18,12 +18,12 @@ extern int errno;
 //Function prototypes declared here
 void outputData(int logicalAdd, int physicalAdd, char signedByte, unsigned char page, unsigned char offset);
 void readPageFromBackingStore(char page[], FILE * FD, int pageNumber);
-void initializeTLB(int arr[][2], size_t size);
+void initializeTLB(char arr[][2], size_t size);
 void printTable(int arr[], size_t size);
 void initialize(int arr[], size_t size);
 void bin2(char * arr);
 void bin(unsigned n);
-int translateAddress(int virtualAddress);
+int translateAddress(int virtualAddress, int frame);
 int getPageNumber(int logicalAdd);
 int getPageOffset(int logicalAdd);
 
@@ -38,13 +38,17 @@ int main(int argc, char const *argv[]) {
 	}
 
 	char logicalAdd[8];         //A char representation of a logical address from address file
-	char page[256];             //a 256 byte page loaded from disk (BACKING_STORE.bin file)
+	char page[PAGE_LENGTH];     //a 256 byte page loaded from disk (BACKING_STORE.bin file)
 	int logicalAddress;         //an integer representation of a logical address from the address file
     int pageNum;                //page number of the current logical address
     int physicalAddress;        //full physical address where the signed byte is stored
     signed char signedByte;     //physical frame number
     FILE *addFD = NULL;         //file descriptor for logical address file
     FILE *backFD = NULL;        //file descriptor for the backing store file
+    int pageFaults = 0;
+    int TLBhits = 0;
+    int currentFrame = 0;       //to keep track of which frame number we are entering to RAM
+    int totalNumAddresses = 0;
 
 	//initialize arrays for ram, virtual memory, and the TLB
 	int ram[FRAME_SIZE * NUM_FRAMES]; 	//set up ram to have 256 frames with 256 bytes each
@@ -52,7 +56,7 @@ int main(int argc, char const *argv[]) {
 	int pageTable[PAGE_LENGTH];
     //set the TLB to have 16 entries and 2 slots for each entry
     // one slot for the page number and one for the frame number
-	int tlb[TLB_SIZE][2];
+	char tlb[TLB_SIZE][2];
 
 	// initialize each table with blank memory (-1 in each slot)
 	initialize(ram, FRAME_SIZE * NUM_FRAMES);
@@ -75,29 +79,35 @@ int main(int argc, char const *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
+    int i = 1;
+
 	//This while loop reads in each line of logical addresses and processes them
 	//using the functions written for dealing with a paging system
 	while (fgets(logicalAdd, 7, addFD) != NULL) { //logicalAdd now holds the next logical address
+        totalNumAddresses++;
 		logicalAddress = atoi(logicalAdd);    //logicalAddress is the integer version
         //get the page number and see if there is an entry in the page table there
         pageNum = getPageNumber(logicalAddress);
         //if the page number was in the page table:
         if (pageTable[pageNum] != -1) {
             //generate the physical address and get the byte stored there
-            physicalAddress = translateAddress(logicalAddress);
-            signedByte = (char) ram[physicalAddress];
+            physicalAddress = pageTable[pageNum] * FRAME_SIZE + getPageOffset(logicalAddress);
+            signedByte = ram[physicalAddress];
         }
         else { //if not in page table - PAGE FAULT!!:
             //load a page into the RAM from secondary memory
             readPageFromBackingStore(page, backFD, pageNum);
-            //ram[pageNum * PAGE_LENGTH] = page;
+            pageFaults++;
+            memcpy(ram, page, PAGE_LENGTH);
             //translate the logical address to a physical address
-            physicalAddress = translateAddress(logicalAddress);
+            physicalAddress = translateAddress(logicalAddress, currentFrame);
             //then update the page table
-            pageTable[pageNum] = physicalAddress >> 8;
+            pageTable[pageNum] = currentFrame;
+            currentFrame++;
         }
+        //printf("%d: %d\n", i++, physicalAddress);
         //now get the signed byte from the correct location in RAM
-        signedByte = ram[physicalAddress];
+        signedByte = (unsigned char)ram[physicalAddress];
         /*generate output for the user to see what happened
         * This includes:
         *       Locical address
@@ -109,6 +119,8 @@ int main(int argc, char const *argv[]) {
         outputData(logicalAddress, physicalAddress, signedByte, pageNum, getPageOffset(logicalAddress));
 	} //end main while for logical address processing
 
+    printf("Total page faults: %d\n", pageFaults);
+    printf("%lf\n", (float) pageFaults / totalNumAddresses);
     //close both the logical address file and the backing store file
     fclose(addFD);
     fclose(backFD);
@@ -163,7 +175,7 @@ void initialize(int arr[], size_t size) {
  *  size: the size of the array
  *
  */
-void initializeTLB(int arr[][2], size_t size) {
+void initializeTLB(char arr[][2], size_t size) {
 	int i = 0;
 	for (i = 0; i < size; i++) {
 		arr[i][0] = -1;
@@ -213,7 +225,7 @@ int getPageOffset(int logicalAdd) {
  *  returns: the 8 bit representation of the page number
  */
 void outputData(int logicalAdd, int physicalAdd, char signedByte, unsigned char page, unsigned char offset) {
-	char *head_foot = "---------------------------\n";
+	char *head_foot = "---------------------------";
 	printf("%s\n", head_foot);
 	printf("Logical Address: %i\n", logicalAdd);
 	printf("Physical Address: %i\n", physicalAdd);
@@ -231,16 +243,15 @@ void outputData(int logicalAdd, int physicalAdd, char signedByte, unsigned char 
  *          [page # as first 8 bits][page offset as second 8 bits]
  *  virtualAddress: the virtual (logical) address to be translated
  *
- *  returns: the frame number of the address
- *           returns -1 if there is a page fault
+ *  returns: the physical address
+ *
  */
-int translateAddress(int virtualAddress) {
+int translateAddress(int virtualAddress, int frame) {
 	unsigned char page, offset; //variables for holding the page number and page offset
-	int frame, physicalAddress;
+	int physicalAddress;
 	offset = getPageOffset(virtualAddress);
 	page = getPageNumber(virtualAddress);
-	frame = page * FRAME_SIZE;
-	physicalAddress = frame + offset;
+	physicalAddress = (frame * FRAME_SIZE) + offset;
     return physicalAddress;
 }
 
